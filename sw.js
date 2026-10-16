@@ -1,5 +1,5 @@
-const V = 'pp-v1';
-const ASSETS = ['./', 'index.html', 'app.js', 'logic.js', 'style.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
+const V = 'pp-v3';
+const ASSETS = ['./', 'index.html', 'app.js', 'logic.js', 'history.js', 'debug.js', 'style.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
   'vendor/tesseract.min.js', 'vendor/worker.min.js', 'vendor/tesseract-core-lstm.wasm.js', 'vendor/tesseract-core-simd-lstm.wasm.js', 'lang/eng.traineddata.gz'];
 self.addEventListener('install', (e) => e.waitUntil(caches.open(V).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (e) => e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== V && k !== 'pp-shared').map((k) => caches.delete(k)))).then(() => self.clients.claim())));

@@ -1,9 +1,34 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8">
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0b5d3b"><title>PawnPrice</title>
-<link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icons/icon-192.png"><link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="style.css"></head><body>
+<meta name="theme-color" content="#f2f5f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d1311" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<title>PawnPrice</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
 <main id="view"></main>
-<nav id="tabs"><button data-tab="price">$<span>Price</span></button><button data-tab="history">≡<span>History</span></button><button data-tab="settings">⚙<span>Settings</span></button></nav>
+<nav id="tabs" aria-label="Primary">
+  <button type="button" data-tab="price">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v17M16.2 7.2c0-1.6-1.7-2.9-4.2-2.9S7.8 5.6 7.8 7.2 9.4 10 12 10s4.2 1.2 4.2 2.8-1.7 2.9-4.2 2.9-4.2-1.3-4.2-2.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <span>Price</span>
+  </button>
+  <button type="button" data-tab="history">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <span>History</span>
+  </button>
+  <button type="button" data-tab="settings">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16M4 16h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="9" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="15" cy="16" r="2.2" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+    <span>Settings</span>
+  </button>
+</nav>
 <script src="vendor/tesseract.min.js"></script>
-<script type="module" src="app.js"></script></body></html>
+<script type="module" src="app.js"></script>
+</body>
+</html>
