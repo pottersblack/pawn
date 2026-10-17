@@ -115,6 +115,8 @@ test('batch intake, date history, and hidden debug flag', async (t) => {
     await page.locator('#mv').waitFor();
     if (!(await page.locator('#mv').innerText()).includes('100')) fail('market value');
     if (!(await page.locator('.offer.rec').innerText()).toLowerCase().includes('suggested')) fail('no suggested offer');
+    if (!(await page.getByText(/price to buy/i).count())) fail('buy price missing');
+    if (!(await page.getByText('How this was calculated').count())) fail('breakdown missing');
     await shot(page, 'step_item_priced');
 
     await page.getByRole('button', { name: 'Next item' }).click();
@@ -181,7 +183,7 @@ test('batch intake, date history, and hidden debug flag', async (t) => {
       fail('debug page missing Start batch\n' + text.slice(0, 500) + '\n' + derrors.join('\n') + '\n' + err.message);
     }
     const st = await dpage.evaluate(() => window.__pp.debug.state());
-    if (!st.enabled || st.sw !== 'pp-v3') fail('debug state ' + JSON.stringify(st));
+    if (!st.enabled || st.sw !== 'pp-v4') fail('debug state ' + JSON.stringify(st));
     await dpage.getByRole('button', { name: 'Start batch' }).click();
     await dpage.getByRole('button', { name: 'Debug' }).click();
     await dpage.getByRole('button', { name: 'Export JSON' }).waitFor();

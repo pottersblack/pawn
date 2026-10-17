@@ -1,8 +1,9 @@
 import { parseScreenshot, mergeScreenshots, value, offers } from './logic.js';
 import { buildHistory, filterBatches, filterCustomers, dayKey } from './history.js';
+import { buildBreakdown } from './breakdown.js';
 import { createDebug, LOG_CAP } from './debug.js';
 
-const SW_V = 'pp-v3';
+const SW_V = 'pp-v4';
 
 function readDebugFlag() {
   const params = new URLSearchParams(location.search);
@@ -175,9 +176,9 @@ async function preprocess(blob) {
   x.putImageData(d, 0, 0); return c;
 }
 
-const S = { shots: [], rows: [], name: '', busy: false, msg: '', editing: null, progress: '' };
+const S = { shots: [], rows: [], name: '', busy: false, msg: '', editing: null, progress: '', paid: null, offerDivisor: null, calcOpen: false };
 let tab = 'price', hist = { day: null, item: null }, draft = null, token = 0, saving = false;
-const clearSession = () => Object.assign(S, { shots: [], rows: [], name: '', msg: '', editing: null, progress: '', busy: false });
+const clearSession = () => Object.assign(S, { shots: [], rows: [], name: '', msg: '', editing: null, progress: '', busy: false, paid: null, offerDivisor: null, calcOpen: false });
 
 async function importFiles(files) {
   files = [...files].filter((f) => f.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(f.name || ''));
@@ -241,7 +242,7 @@ async function saveCurrentItem() {
   if (!v) return null;
   const prices = S.rows.map((r) => ({ price: r.price, included: r.included, title: r.title }));
   if (S.editing) {
-    const item = { ...S.editing, name: S.name || 'Item', prices, marketValue: v.value };
+    const item = { ...S.editing, name: S.name || 'Item', prices, marketValue: v.value, amountPaid: S.paid, offerDivisor: S.offerDivisor };
     const id = await db.put('items', item);
     for (const s of await db.by('shots', 'itemId', id)) await db.del('shots', s.id);
     for (const b of S.shots) await db.put('shots', { itemId: id, blob: b, name: b.name || 'screenshot' });
@@ -249,7 +250,7 @@ async function saveCurrentItem() {
     return item;
   }
   if (!draft) await startBatch();
-  const item = { batchId: draft.id, notes: '', amountPaid: null, offerDivisor: null, resalePrice: v.value, created: Date.now(), name: S.name || 'Item', prices, marketValue: v.value };
+  const item = { batchId: draft.id, notes: '', amountPaid: S.paid, offerDivisor: S.offerDivisor, resalePrice: v.value, created: Date.now(), name: S.name || 'Item', prices, marketValue: v.value };
   item.id = await db.put('items', item);
   for (const b of S.shots) await db.put('shots', { itemId: item.id, blob: b, name: b.name || 'screenshot' });
   draft.items.push(item);
@@ -258,17 +259,61 @@ async function saveCurrentItem() {
   return item;
 }
 
-function offerCards(v) {
+function sameDivisor(a, b) { return a != null && b != null && Math.abs(+a - +b) < 1e-9; }
+function buyOffers(market, selected, { compact = false, attr = 'data-offer' } = {}) {
+  if (!finite(market)) return '';
   const divs = settings.divisors, sug = suggestedIndex(divs);
-  return `<div class="offers">${divs.map((d, i) => {
-    const amt = dollars(offers(v.value, [d])[0][1]);
+  return `<p class="buy-label">Price to buy</p><div class="offers${compact ? ' compact' : ''}">${offers(+market, divs).map(([d, amt], i) => {
+    const on = sameDivisor(selected, d);
     const rec = i === sug;
-    return `<div class="offer${rec ? ' rec' : ''}"><span class="tag">${rec ? 'Suggested' : 'Offer'}</span><span class="div">÷ ${d}</span><b>${amt}</b></div>`;
+    return `<button type="button" class="offer${on ? ' on' : ''}${rec ? ' rec' : ''}" ${attr}="${d}" aria-pressed="${on ? 'true' : 'false'}"><span class="tag">${rec ? 'Suggested' : 'Buy'}</span><span class="div">÷ ${d}</span><b>${dollars(amt)}</b></button>`;
   }).join('')}</div>`;
+}
+function paidField(value) {
+  return `<label class="field paid-field">Amount paid<span class="inputwrap"><input id="paid" type="number" inputmode="decimal" step="0.01" min="0" value="${value ?? ''}"><span class="unit">$</span></span></label>`;
+}
+function priceStatus(p) {
+  if (p.status === 'cluster') return 'In cluster';
+  if (p.status === 'left-out') return `Left out · outside the ${dollars(settings.spread)} spread`;
+  if (p.status === 'excluded') return 'Excluded';
+  return 'Used in the median';
+}
+function calcSection(rows, { open = false, interactive = false, id = 'calc' } = {}) {
+  const list = rows || [];
+  if (!list.length) return '';
+  const b = buildBreakdown(list, settings.spread, settings.divisors);
+  const intro = b.marketValue == null
+    ? 'Include at least one price.'
+    : b.usedCluster
+      ? `Median of ${b.clusterCount} of ${b.includedCount} prices within ${dollars(b.spread)}.`
+      : `Median of ${plural(b.includedCount, 'price')}. Fewer than 3 prices, so the ${dollars(b.spread)} spread is not applied.`;
+  const rowsHtml = b.prices.map((p, i) => {
+    const cls = p.status === 'left-out' ? 'out' : p.status === 'excluded' ? 'off' : 'in';
+    const note = p.status === 'left-out' ? `Outside the ${dollars(settings.spread)} spread` : (p.title || priceStatus(p));
+    const body = `<span class="grow"><span class="amt">${money(p.price)}</span><span class="t">${esc(note)}</span></span>`;
+    if (!interactive) return `<li class="calc-row ${cls}">${body}</li>`;
+    const manual = list[i] && list[i].manual;
+    const pill = p.status === 'cluster' ? 'In cluster' : p.status === 'left-out' ? 'Left out' : p.status === 'excluded' ? 'Excluded' : 'Median';
+    return `<li class="calc-line"><button type="button" class="calc-row ${cls}" data-p="${i}" aria-pressed="${p.included ? 'true' : 'false'}">${body}<span class="pill">${pill}</span></button>${manual ? `<button type="button" class="iconbtn danger-quiet" data-rm="${i}" aria-label="Remove manual price">${I.trash}</button>` : ''}</li>`;
+  }).join('');
+  const divHtml = b.offers.map((o) => `<li>${money(b.marketValue)} ÷ ${o.divisor} = ${o.quotient.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} → ${dollars(o.amount)}</li>`).join('');
+  return `<details class="calc" id="${esc(id)}" ${open ? 'open' : ''}>
+    <summary>How this was calculated</summary>
+    <p class="hint">${esc(intro)}</p>
+    ${interactive ? '<p class="hint">Tap a price to include or exclude it.</p>' : ''}
+    ${b.marketValue == null ? '' : `<p class="calc-med"><span>Median</span><b>${money(b.marketValue)}</b></p><ul class="calc-div">${divHtml}</ul>`}
+    <ul class="calc-list">${rowsHtml}</ul>
+  </details>`;
 }
 function savedList() {
   if (!draft || !draft.items.length) return '';
-  return `<div class="list">${draft.items.map((it) => `<div class="crow simple"><span class="crow-main"><span class="crow-name">${esc(it.name || 'Item')}</span><span class="crow-meta">Market ${moneyOr(it.marketValue)}</span></span></div>`).join('')}</div>`;
+  return `<div class="batch-saved">${draft.items.map((it) => `<article class="saved-item" data-saved="${it.id}">
+    <h2 class="batch-name">${esc(it.name || 'Item')}</h2>
+    <p class="crow-meta">Market ${moneyOr(it.marketValue)}</p>
+    ${buyOffers(it.marketValue, it.offerDivisor, { compact: true, attr: 'data-saved-offer' })}
+    <p class="paid-line">Paid ${moneyOr(it.amountPaid)}</p>
+    ${calcSection(it.prices, { id: `saved-calc-${it.id}` })}
+  </article>`).join('')}</div>`;
 }
 
 function renderStart() {
@@ -282,7 +327,11 @@ function renderStart() {
 
 function renderPrice() {
   if (!draft && !S.editing) return renderStart();
-  const { v, inc, cl } = valuation();
+  const { v, inc } = valuation();
+  if (v && S.offerDivisor != null) {
+    const hit = offers(v.value, settings.divisors).find(([d]) => sameDivisor(d, S.offerDivisor));
+    if (hit) S.paid = hit[1];
+  }
   const nSaved = draft ? draft.items.length : 0;
   const showEmpty = !S.rows.length && !S.busy;
   const urls = blobURLs(S.shots);
@@ -304,27 +353,50 @@ function renderPrice() {
     ${S.msg ? `<p class="err" role="alert">${esc(S.msg)}</p>` : ''}
     ${thumbs(urls)}
     ${(S.shots.length || S.rows.length) ? `<p class="countline">${plural(S.shots.length, 'screenshot')} · ${plural(S.rows.length, 'price')}</p>` : ''}
-    ${showEmpty ? `<div class="empty"><div class="empty-ico">${I.camera}</div><h2>Share or add eBay sold screenshots</h2><p>Sold prices stay on this phone. Offers show up as soon as a price is in.</p></div>` : ''}
-    ${v ? `<section class="valuecard"><div class="label">Market value</div><div class="big" id="mv">${money(v.value)}</div><p class="explain">${esc(explain)}</p>${offerCards(v)}</section>` : ''}
+    ${showEmpty ? `<div class="empty"><div class="empty-ico">${I.camera}</div><h2>Share or add eBay sold screenshots</h2><p>Sold prices stay on this phone. The market value and buy prices show up as soon as a price is in.</p></div>` : ''}
+    ${v ? `<section class="valuecard" id="result"><div class="label">Market value</div><div class="big" id="mv">${money(v.value)}</div><p class="explain">${esc(explain)}</p><div id="buy">${buyOffers(v.value, S.offerDivisor)}</div>${paidField(S.paid)}</section>` : ''}
     ${S.rows.length && !v ? `<section class="valuecard"><div class="label">Market value</div><p class="explain">Include at least one price.</p></section>` : ''}
     <div class="row manual"><input id="manual" type="number" inputmode="decimal" step="0.01" min="0" placeholder="Add price manually" aria-label="Add price manually"><button type="button" class="btn" id="add">Add</button></div>
-    ${S.rows.length ? `<div class="legend"><span><i class="sw in"></i>In cluster</span><span><i class="sw out"></i>Other price</span><span><i class="sw off"></i>Excluded</span></div>
-      <p class="hint">Tap a price to include or exclude it.</p>
-      <div id="prices">${S.rows.map((r, i) => {
-        const state = !r.included ? 'off' : cl.has(i) ? 'in' : 'out';
-        const label = !r.included ? 'Excluded' : cl.has(i) ? 'In cluster' : 'Other';
-        const ic = !r.included ? I.minus : cl.has(i) ? I.check : I.dot;
-        return `<div class="price ${state}"><button type="button" class="price-main" data-p="${i}" aria-pressed="${r.included}"><span class="pstat">${ic}</span><span class="grow"><span class="amt">${money(r.price)}</span><span class="t">${esc(r.title)}</span></span><span class="pill">${label}</span></button>${r.manual ? `<button type="button" class="iconbtn danger-quiet" data-rm="${i}" aria-label="Remove manual price">${I.trash}</button>` : ''}</div>`;
-      }).join('')}</div>
-      <label class="field" style="margin-top:14px"><span>Item name</span><input id="name" type="text" placeholder="What is it?" value="${esc(S.name)}" autocomplete="off"></label>` : ''}
+    ${S.rows.length ? `<label class="field item-name"><span>Item name</span><input id="name" type="text" placeholder="What is it?" value="${esc(S.name)}" autocomplete="off"></label>
+      ${calcSection(S.rows, { open: S.calcOpen, interactive: true })}` : ''}
     </div>${actions}`;
   $('#file').onchange = (e) => importFiles(e.target.files);
   $('#add').onclick = () => { const p = parseFloat($('#manual').value); if (p > 0) { S.rows.push({ price: p, title: 'Manual', included: true, manual: true }); render(); } };
   $('#manual').onkeydown = (e) => { if (e.key === 'Enter') $('#add').click(); };
   $('#name')?.addEventListener('input', (e) => (S.name = e.target.value));
-  $('#prices')?.addEventListener('click', (e) => {
-    const rm = e.target.closest('[data-rm]'); if (rm) { S.rows.splice(+rm.dataset.rm, 1); return render(); }
-    const row = e.target.closest('[data-p]'); if (row) { S.rows[+row.dataset.p].included = !S.rows[+row.dataset.p].included; render(); }
+  $('#calc')?.addEventListener('toggle', () => { S.calcOpen = $('#calc').open; });
+  $('#calc')?.addEventListener('click', (e) => {
+    const rm = e.target.closest('[data-rm]'); if (rm) { S.rows.splice(+rm.dataset.rm, 1); S.calcOpen = true; return render(); }
+    const row = e.target.closest('[data-p]'); if (row) { S.rows[+row.dataset.p].included = !S.rows[+row.dataset.p].included; S.calcOpen = true; render(); }
+  });
+  $('#buy')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-offer]'); if (!b || !v) return;
+    S.offerDivisor = +b.dataset.offer;
+    S.paid = offers(v.value, [S.offerDivisor])[0][1];
+    render();
+  });
+  $('#paid')?.addEventListener('input', (e) => {
+    const n = parseFloat(e.target.value);
+    S.paid = Number.isFinite(n) ? n : null;
+    if (v && S.offerDivisor != null) {
+      const amt = offers(v.value, [S.offerDivisor])[0][1];
+      if (S.paid !== amt) S.offerDivisor = null;
+    }
+    document.querySelectorAll('#buy [data-offer]').forEach((b) => {
+      const on = sameDivisor(S.offerDivisor, b.dataset.offer);
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  });
+  document.querySelectorAll('[data-saved-offer]').forEach((btn) => {
+    btn.onclick = async () => {
+      const item = draft?.items.find((i) => i.id === +btn.closest('[data-saved]').dataset.saved);
+      if (!item || !finite(item.marketValue)) return;
+      item.offerDivisor = +btn.dataset.savedOffer;
+      item.amountPaid = offers(item.marketValue, [item.offerDivisor])[0][1];
+      await db.put('items', item);
+      render();
+    };
   });
   $('#save')?.addEventListener('click', async () => { if (saving) return; saving = true; try { await saveCurrentItem(); tab = 'history'; } finally { saving = false; render(); } });
   $('#next')?.addEventListener('click', async () => { if (saving) return; saving = true; try { await saveCurrentItem(); } finally { saving = false; render(); } });
@@ -411,20 +483,19 @@ async function renderHistory(my) {
     const shots = await db.by('shots', 'itemId', item.id);
     if (my !== token) return;
     const urls = blobURLs(shots.map((s) => s.blob));
-    const divs = settings.divisors, sug = suggestedIndex(divs);
     const prices = item.prices || [];
     v.innerHTML = `${appBar({ title: item.name || 'Item', back: true })}
       <div class="pad">
-      <section class="valuecard"><div class="label">Market value</div><div class="big">${moneyOr(item.marketValue)}</div>
-        ${finite(item.marketValue) ? `<div class="chips">${divs.map((d, i) => `<button type="button" class="chip ${item.offerDivisor === d ? 'on' : ''}" data-d="${d}"><span class="chip-k">${i === sug ? 'Suggested · ' : ''}÷ ${d}</span><span class="chip-v">${dollars(offers(item.marketValue, [d])[0][1])}</span></button>`).join('')}</div>` : ''}
+      <section class="valuecard" id="result"><div class="label">Market value</div><div class="big">${moneyOr(item.marketValue)}</div>
+        ${finite(item.marketValue) ? `<div id="buy">${buyOffers(item.marketValue, item.offerDivisor)}</div>` : ''}
       </section>
       <div class="stack">
         <label class="field">Amount paid<span class="inputwrap"><input id="paid" type="number" inputmode="decimal" step="0.01" value="${item.amountPaid ?? ''}"><span class="unit">$</span></span></label>
         <label class="field">Resale / list price<span class="inputwrap"><input id="resale" type="number" inputmode="decimal" step="0.01" value="${finite(item.resalePrice ?? item.marketValue) ? Number(item.resalePrice ?? item.marketValue).toFixed(2) : ''}"><span class="unit">$</span></span></label>
         <div class="profitline" id="profitline"></div>
+        ${calcSection(prices)}
         <label class="field">Name<input id="iname" type="text" value="${esc(item.name || '')}"></label>
         <label class="field">Notes<textarea id="notes" rows="3">${esc(item.notes || '')}</textarea></label>
-        <div class="minichips">${prices.map((p) => `<span class="minichip ${p.included ? '' : 'off'}">${money(p.price)}</span>`).join('')}</div>
         ${urls.length ? thumbs(urls) : ''}
         <button type="button" class="btn alt block" id="recheck">Re-check prices / add screenshots</button>
         <button type="button" class="linkdanger" id="idel">${I.trash} Delete item</button>
@@ -442,10 +513,14 @@ async function renderHistory(my) {
     paintProfit();
     v.querySelector('#paid').oninput = paintProfit;
     v.querySelector('#resale').oninput = paintProfit;
-    v.querySelectorAll('[data-d]').forEach((b) => (b.onclick = () => {
-      div = +b.dataset.d;
+    v.querySelectorAll('#buy [data-offer]').forEach((b) => (b.onclick = () => {
+      div = +b.dataset.offer;
       v.querySelector('#paid').value = offers(item.marketValue, [div])[0][1];
-      v.querySelectorAll('[data-d]').forEach((x) => x.classList.toggle('on', x === b));
+      v.querySelectorAll('#buy [data-offer]').forEach((x) => {
+        const on = x === b;
+        x.classList.toggle('on', on);
+        x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
       paintProfit();
     }));
     v.querySelector('#isave').onclick = async () => {
@@ -457,6 +532,8 @@ async function renderHistory(my) {
     v.querySelector('#recheck').onclick = () => {
       clearSession();
       S.editing = item; S.name = item.name || '';
+      S.paid = finite(item.amountPaid) ? +item.amountPaid : null;
+      S.offerDivisor = item.offerDivisor ?? null;
       S.shots = shots.map((s) => s.blob);
       S.rows = (item.prices || []).map((p) => ({ ...p, title: p.title || 'saved' }));
       tab = 'price'; hist.item = null; render();
